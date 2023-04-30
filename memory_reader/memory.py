@@ -1,7 +1,9 @@
-from .os_api import open_process, read_process_memory, close_handle
-from .os_api import task_for_pid, mach_task_self, vm_region_recurse_64, VM_REGION_BASIC_INFO_64, mach_msg_type_number_t, VM_PROT_READ
 import ctypes
 import sys
+import memory_reader.os_api_common as os_api
+from memory_reader.os_api_mac import task_for_pid, mach_task_self, mach_msg_type_number_t, vm_region_recurse_64, \
+    VM_PROT_READ
+
 
 class MemoryRegion:
     def __init__(self, base_address, size, protection):
@@ -13,9 +15,12 @@ class MemoryRegion:
         return f"<MemoryRegion base_address={hex(self.base_address)}, size={self.size}, protection={self.protection}>"
 
 def get_memory_regions(pid):
-    # This function should be implemented for each platform separately
-    # Here's an example for the Windows platform:
-    return get_memory_regions_windows(pid)
+    return list_memory_regions(pid)
+
+# def get_memory_regions(pid):
+#     # This function should be implemented for each platform separately
+#     # Here's an example for the Windows platform:
+#     return get_memory_regions_windows(pid)
 
 def list_memory_regions(pid):
 
@@ -34,8 +39,49 @@ def list_memory_regions(pid):
     # For example, on Windows, you can use VirtualQueryEx
 
 def get_memory_regions_windows(pid):
-    # ... existing Windows implementation ...
-    pass
+
+    MEM_COMMIT = 0x1000
+    MEM_FREE = 0x10000
+    PAGE_READWRITE = 0x04
+    PAGE_READONLY = 0x02
+
+    process_handle = os_api.open_process(pid)
+    if not process_handle:
+        raise RuntimeError(f"Failed to open process with PID {pid}")
+
+    memory_regions = []
+    base_address = 0
+    memory_basic_information = os_api.MEMORY_BASIC_INFORMATION()
+
+    while True:
+        result = os_api.kernel32.VirtualQueryEx(
+            process_handle,
+            ctypes.c_void_p(base_address),
+            ctypes.byref(memory_basic_information),
+            ctypes.sizeof(memory_basic_information),
+        )
+
+        if result == 0:
+            break
+
+        if (
+            memory_basic_information.State == MEM_COMMIT
+            and (memory_basic_information.Protect == PAGE_READONLY or memory_basic_information.Protect == PAGE_READWRITE)
+        ):
+            memory_regions.append(
+                MemoryRegion(
+                    memory_basic_information.BaseAddress,
+                    memory_basic_information.RegionSize,
+                    memory_basic_information.Protect,
+                )
+            )
+
+        base_address += memory_basic_information.RegionSize
+
+    os_api.close_handle(process_handle)
+
+    return memory_regions
+
 
 def get_memory_regions_mac(pid):
 
@@ -76,18 +122,18 @@ def get_memory_regions_linux(pid):
     pass
 
 def read_memory(pid, base_address, size):
-    process_handle = open_process(pid)
+    process_handle = os_api.open_process(pid)
     try:
-        return read_process_memory(process_handle, base_address, size)
+        return os_api.read_process_memory(process_handle, base_address, size)
     finally:
-        close_handle(process_handle)
+        os_api.close_handle(process_handle)
 
 def read_memory_region(pid, memory_region):
-    process_handle = open_process(pid)
+    process_handle = os_api.open_process(pid)
     try:
-        memory_data = read_process_memory(process_handle, memory_region.base_address, memory_region.size)
+        memory_data = os_api.read_process_memory(process_handle, memory_region.base_address, memory_region.size)
     finally:
-        close_handle(process_handle)
+        os_api.close_handle(process_handle)
 
     return memory_data
 
